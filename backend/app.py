@@ -1,45 +1,93 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import random
+import pandas as pd
+import joblib
 
-# 1. Flask App Initialize karna
 app = Flask(__name__)
-CORS(app) # React frontend se connect karne ke liye CORS enable kiya
+CORS(app)  # Keep this enabled for your upcoming React frontend integration!
 
-# 2. Test Route (Jaise Express mein app.get('/') hota hai)
-@app.route('/', methods=['GET'])
+
+try:
+    model = joblib.load("../model/model.pkl")
+except Exception as e:
+    print(f"❌ Error loading model: {str(e)}")
+    model = None
+
+
+columns = [
+    'status_account', 'month_duration', 'credit_history', 'purpose', 'credit_amount',
+    'status_savings', 'years_employment', 'payment_to_income_ratio', 'status_and_sex',
+    'secondary_obligor', 'residence_since', 'collateral', 'age', 'other_installment_plans',
+    'housing', 'n_credits', 'job', 'n_guarantors', 'telephone', 'is_foreign_worker'
+]
+
+@app.route("/")
 def home():
-    return jsonify({"message": "Credit Scoring Backend (Mock Mode) is running!"})
+    return {
+        "message": "Credit Scoring API Running Successfully"
+    }
 
-# 3. Predict Route (Yahan React se data aayega)
-@app.route('/predict', methods=['POST'])
+@app.route("/predict", methods=["POST"])
 def predict():
-    try:
-        # React se aane wala JSON data lena
-        data = request.get_json()
-        
-        # Abhi hamare paas model file nahi hai, toh ham ek simple rule-based logic laga dete hain:
-        # Agar customer ki age 25 se zyada hai aur credit_amount 5000 se kam hai, toh 'Good' warna 'Bad'
-        age = data.get('age', 30)
-        credit_amount = data.get('credit_amount', 1000)
-        
-        if age > 25 and credit_amount < 8000:
-            result = "Good"
-            score = random.randint(700, 850) # Excellent credit score range
-        else:
-            result = "Bad"
-            score = random.randint(300, 600) # Poor credit score range
-            
-        return jsonify({
-            "status": "success",
-            "credit_risk": result,
-            "credit_score": score,
-            "message": "Prediction generated using development mock logic."
-        })
-        
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 400
+    if not model:
+        return jsonify({"error": "Machine learning model is not initialized on the server."}), 500
 
-# 4. Server Run karna (Port 5000 par)
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    try:
+       
+        data = request.get_json(silent=True)
+        if not data:
+            return jsonify({"error": "Invalid request. Body must be a valid JSON object."}), 400
+
+        # 2. Day 17 Validation: Check for missing critical fields
+        missing_fields = [col for col in columns if col not in data]
+        if missing_fields:
+            return jsonify({
+                "error": "Missing required fields in payload",
+                "missing_fields": missing_fields
+            }), 400
+
+       
+        for numeric_field in ['month_duration', 'credit_amount', 'age']:
+            if not isinstance(data[numeric_field], (int, float)):
+                return jsonify({"error": f"Field '{numeric_field}' must be a numeric value."}), 400
+
+      
+        customer = pd.DataFrame([data])
+
+       
+        customer = customer.reindex(
+            columns=columns,
+            fill_value=0
+        )
+
+        
+        prediction = model.predict(customer)[0]
+
+       
+        probability = model.predict_proba(customer)[0]
+
+        result = (
+            "Good Credit Risk"
+            if prediction == 1
+            else "Bad Credit Risk"
+        )
+
+        return jsonify({
+            "prediction": result,
+            "bad_risk_probability": round(probability[0] * 100, 2),
+            "good_risk_probability": round(probability[1] * 100, 2)
+        })
+
+    except Exception as e:
+        return jsonify({
+            "error": "An internal server error occurred.",
+            "details": str(e)
+        }), 500
+
+
+if __name__ == "__main__":
+    app.run(
+        debug=True,
+        host="0.0.0.0",
+        port=5000
+    )
